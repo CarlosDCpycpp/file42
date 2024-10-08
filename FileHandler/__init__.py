@@ -1,11 +1,7 @@
 from __future__ import annotations
 import csv
 import typing as _t
-try:
-    import pandas as _pd
-    _pandas: bool = True
-except ModuleNotFoundError:
-    _pandas = False
+import os as _os
 
 
 _matrix = _t.Optional[list[list[_t.Optional[_t.Any]]]]
@@ -230,23 +226,24 @@ class CsvFile:
             self.columns = []
             self.header = None
         else:
-            with open(self.file, 'r', newline='') as file_:
-                reader = csv.reader(file_)
-                self.data: list[list] = list(reader)
+            self._update_properties()
+            # with open(self.file, 'r', newline='') as file_:
+            #     reader = csv.reader(file_)
+            #     self.data: list[list] = list(reader)
+            #
+            #     self.rows: list = []
+            #     for i in range(len(self.data)):
+            #         self.rows.append(self.get(row=i+1))
+            #
+            #     self.columns: list = []
+            #     for i in range(len(self.data[0])):
+            #         self.columns.append(self.get(column = i+1))
+            #
+            #     self.header = self.rows[0]
+            #
+            #     self.ratio: list[int] = [len(self.rows), len(self.columns)]
 
-                self.rows: list = []
-                for i in range(len(self.data)):
-                    self.rows.append(self.get(row=i+1))
-
-                self.columns: list = []
-                for i in range(len(self.data[0])):
-                    self.columns.append(self.get(column = i+1))
-
-                self.header = self.rows[0]
-
-                self.ratio: list[int] = [len(self.rows), len(self.columns)]
-
-    def update_properties(self):
+    def _update_properties(self) -> None:
         with open(self.file, 'r', newline='') as file_:
             reader = csv.reader(file_)
             self.data: list[list] = list(reader)
@@ -263,27 +260,112 @@ class CsvFile:
 
             self.ratio: list[int] = [len(self.rows), len(self.columns)]
 
-    def update_file(self):
+    def update_file(self) -> None:
         self.re_write(self.get())
 
+    @staticmethod
+    def set_up(name: str, data: _matrix) -> CsvFile:
+        f"""This method is supposed to be used if a file is empty 
+        or if you want to rewrite an existing file and assign it to a variable.\n
+        The parameter \"name\" is the name of the file (don\'t include the extension, i.e. \".csv\").\n
+        The parameter \"data\" is the data that you want to assign to the file."""
+        file = CsvFile(name)
+        file.re_write(data)
+        return file
+
+    @staticmethod
+    def set_up_new(name: str, data: _matrix) -> CsvFile:
+        file = CsvFile(name, new=True)
+        file.re_write(data)
+        return file
+
+    def __enter__(self, specs: str):
+        possible_specs: list[str] = ['r', 'w']
+        if not specs in possible_specs:
+            ps: str = ''
+            for i in possible_specs:
+                ps += ' ' + i + ','
+            ps = ps[::-1]
+            raise ValueError(f"Unknown specifier {specs}. Possible specifiers are {ps}")
+        self._opened = open(self.file)
+        return self._opened
+
+    def __exit__(self):
+        self._opened.close()
+
     def __str__(self):
-        string = ''
-        for index, i in enumerate(self.data):
-            string += str(i)
-            if index != len(self.data) - 1:
-                string += '\n'
-        return string
+        col_widths = [max(len(str(item)) for item in col) for col in zip(*self.data)]
+        result = ''
+        for row in self.data:
+            row_str = ''
+            for idx, element in enumerate(row):
+                row_str += str(element).ljust(col_widths[idx] + 2)
+            result += row_str.rstrip() + '\n'
+        return result[:-1]
 
     def __repr__(self):
         return str(self)
+
+    def __format__(self, format_spec: str) -> str:
+        result = ''
+        match format_spec.lower().strip():
+            case 'file':
+                return self.file
+            case 'header':
+                return str(self.header)
+            case 'ratio':
+                return str(self.ratio)
+            case 'no_lines':
+                return str(self.data)
+            case 'no_lines_unpacked':
+                result = []
+                for i in self.data:
+                    temp = ''
+                    for j in i:
+                        temp += f'{j} '
+                    result.append(temp)
+                return str(result)
+            case 'matrix':
+                result += '\n'
+                for i in self.data:
+                    result += str(i) + '\n'
+                return result.rstrip()
+            case 'base':
+                for i in self.data:
+                    result += '\n'
+                    for j in i:
+                        result += f'{j} '
+                return result
+            case '':
+                return str(self)
+            case _:
+                raise ValueError(f"Unknown specifier: {format_spec}.")
+
+    def formatted(self, format_specs: str) -> str:
+        return self.__format__(format_specs)
 
     def __bool__(self):
         if self.data:
             return True
         return False
 
-    def __getitem__(self, index: int|tuple[int, int]):
-        return self.get(row=index-1)
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index: int|tuple[int, int]|str) -> list|None:
+        if index == 0:
+            raise ValueError("Index cannot be 0, this is due to the 1 based indexing used in the CsvFile class.")
+
+        if isinstance(index, str):
+            for index_, _ in enumerate(self.data):
+                if self.header[index_] == index:
+                    return self.columns[index_]
+            else:
+                return None
+        elif isinstance(index, int):
+            return self.get(row=index-1)
+        elif isinstance(index, tuple):
+            return self.get(row=index[0]-1, column=index[1]-1)
 
     def __iter__(self):
         for i in self.get():
@@ -306,8 +388,22 @@ class CsvFile:
                         return True
             return False
 
+    def __delitem__(self, key: int):
+        del self.data[key]
+        self.update_file()
+
     def __hash__(self):
         return hash(self.data)
+
+    def __sizeof__(self):
+        x = 0
+        for i in self.data:
+            for j in i:
+                try:
+                    x += j.__sizeof__()
+                except AttributeError:
+                    return None
+        return x
 
     def __eq__(self, other: CsvFile|_matrix):
         if isinstance(other, CsvFile):
@@ -389,19 +485,46 @@ class CsvFile:
         new_data.append(other)
         new_csv = CsvFile(self.file, new=True)
         new_csv.data = new_data
-        new_csv.update_properties()
+        new_csv._update_properties()
         return new_csv
 
-    def __iadd__(self, other: list):
-        if isinstance(other[0], list):
-            self.data.extend(other)
-        else:
-            self.data.append(other)
-        self.update_properties()
+    def __radd__(self, other):
+        return other - self.get()
+
+    def __iadd__(self, other: list) -> _t.Self:
+        self.insert_row(other)
         return self
 
-    def __call__(self, obj: dict|list[list]):
-        obj = self
+    def __sub__(self, other: list):
+        if len(other) not in self.ratio:
+            raise ValueError("The length isn't equal to number of rows or columns.")
+
+        temp_data = self.data
+        for i in temp_data:
+            if i == other:
+                temp_data.remove(other)
+                break
+        else:
+            for i in range(len(self.columns)):
+                if self.columns[i] == other:
+                    for index, _ in enumerate(temp_data):
+                        del temp_data[index][i]
+                    break
+            else:
+                raise ValueError(f"\"{other}\" is neither a row nor a column.")
+
+        return temp_data
+
+    def __isub__(self, other: list) -> _t.Self:
+        self.data = self - other
+        self.update_file()
+        return self
+
+    def __rsub__(self, other):
+        return other - self.data
+
+    def __call__(self):
+        return self.data
 
     def get(self, row: int|None = None, column: int|None = None):
         if isinstance(row, int) and isinstance(column, int):
@@ -442,16 +565,18 @@ class CsvFile:
 
         self.update_file()
 
+    @property
     def iter_rows(self):
         return iter(self.rows)
 
+    @property
     def iter_column(self):
         return iter(self.columns)
 
     def insert_row(self, row: list, index: int | None = None):
         if len(row) != self.ratio[1]:
             raise ValueError("Row length must match the number of rows.")
-        elif index ==0:
+        elif index == 0:
             raise ValueError("Row cannot be positioned as the header.")
 
         if index is None:
@@ -480,7 +605,7 @@ class CsvFile:
         with open(self.file, 'w', newline='') as file:
             writer = csv.writer(file)
             writer.writerows([[None]])
-        self.update_properties()
+        self._update_properties()
 
     def clear_row(self, index: int):
         if index < 1:
@@ -517,7 +642,7 @@ class CsvFile:
         with open(self.file, 'w', newline='') as file:
             writer = csv.writer(file)
             writer.writerows(content)
-        self.update_properties()
+        self._update_properties()
 
     def elim_row(self, index: int):
         if index is None or not (1 <= index <= self.ratio[0]):
@@ -574,6 +699,52 @@ class CsvFile:
 
         self.update_file()
 
+    def pop(self, row: int|str):
+        if isinstance(row, int):
+            self.data.pop(row)
+            self.update_file()
+            return self
+        elif isinstance(row, str):
+            for index, i in enumerate(self.header):
+                if i == row:
+                    for j, _ in enumerate(self.data):
+                        del self.data[j][index]
+            else:
+                raise ValueError("No match found.")
+
+    def remove(self, list_: list):
+        if len(list_) not in self.ratio:
+            raise ValueError("the \"list_\" argument took has more items than the number of rows or columns.")
+
+        for index, i in enumerate(self.data):
+            if i == list_:
+                self.data.pop(index)
+                break
+        else:
+            for index, i in enumerate(self.columns):
+                if i == list_:
+                    for j, _ in enumerate(self.data):
+                        del self.data[j][index]
+                break
+            else:
+                raise ValueError("No match found.")
+
+        self.update_file()
+        return self
+
+    def index(self, index_) -> tuple[int|None, int|None]:
+        for index__, i in enumerate(self.data):
+            if i == index_:
+                return index__, None
+        for index__, i in enumerate(self.columns):
+            if i == index_:
+                return None, index__
+        for index__, _ in enumerate(self.data):
+            for index_x, j in enumerate(self.columns):
+                if j == index_:
+                    return index__, index_x
+        return None, None
+
     def unique_vals(self, row_index: int|None = None, column_index: int|None = None) -> list|None|bool:
         unique_vals = set()
         if (column_index is None and
@@ -627,7 +798,21 @@ class CsvFile:
             return None
         return list(duplicates)
 
-    # file creators
+    def delete_duplicate_rows(self):
+        seen = set()
+        for i in self.rows:
+            seen.add(i)
+        self.data = list(seen)
+        self.update_file()
+        return self
+
+    def delete(self):
+        x = self.file
+        _os.remove(self.file)
+        del self
+        return f'\"{x}\" was deleted.'
+
+    # file creator
 
     def save_to(self, other: CsvFile):
         other.re_write(self.get())
@@ -640,7 +825,11 @@ class CsvFile:
         new.re_write(self.get())
         return new
 
-    def pandas(self):
-        if _pandas:
-            return _pd.read_csv(self.file)
+    # convert
 
+    def pandas(self):
+        try:  # imports pandas if its installed
+            import pandas as _pd
+            _pd.read_csv(self.file)
+        except ModuleNotFoundError:
+            raise ImportError("Pandas is not installed, therefore the CsvFile.pandas function returned None.")
