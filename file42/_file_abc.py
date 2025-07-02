@@ -5,14 +5,22 @@ from abc import (
     ABCMeta,
     abstractmethod
 )
+from pathlib import Path
 from typing import (
     TextIO,
-    Optional
-
+    Optional,
+    Any,
+    Callable,
+    NoReturn
 )
 from collections.abc import Iterable
+from functools import wraps, cache
 
-from file42._utils.__init__ import raise_if
+from ._utils import (
+    raise_if,
+    applied,
+    pformat_return
+)
 
 
 class _FileABCMeta(ABCMeta):
@@ -54,12 +62,20 @@ class FileABC(
         self.__is_open: bool = False
         self.__file_state: Optional[TextIO] = None
 
+    @property
+    @cache
+    def path(self):
+        return Path(self.file)
+
     def open(self, mode: str = 'r') -> TextIO:
         self.__file_state = open(self.file, mode)
         self.__is_open = True
         return self.__file_state
 
-    def close(self) -> None:
+    def close(self) -> None | NoReturn:
+        if self.__file_state is None:
+            raise RuntimeError(f'Closing of {self.__class__}({self.file}) failed because it was not open.')
+
         self.__file_state.close()
         self.__file_state = None
         self.__is_open = False
@@ -155,3 +171,84 @@ class FileABC(
             self.duplicate(file_to_copy_to)
         elif isinstance(file_to_copy_to, self.__class__):
             self.duplicate(file_to_copy_to.file)
+
+
+class DictLikeFileABC(
+    FileABC,
+    file_like=False
+):
+
+    @abstractmethod
+    def rewrite(self, content: dict):
+        pass
+
+    @pformat_return
+    def __str__(self) -> str:
+        return self._content  # NOQA
+
+    @property
+    @applied(dict.keys)
+    def keys(self):
+        return self._content
+
+    @property
+    @applied(dict.values)
+    def values(self):
+        return self._content
+
+    @property
+    @applied(dict.items)
+    def items(self):
+        return self._content
+
+    def remove(self, key: str) -> None:
+        content = self._content
+        if key in content:
+            del content[key]
+            self.rewrite(content)
+
+    def __getitem__(self, item: str) -> Any:
+        return self._content[item]
+
+    @applied(dict.get, unpack=True)
+    def get(self, item, subs_value):
+        return self._content, item, subs_value
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        (temp_data := self._content)[key] = value
+        self.rewrite(temp_data)
+
+    def __iter__(self):
+        return iter(self._content)
+
+    @staticmethod
+    def _semi_applied(applied_func: Callable) -> Callable:
+        def decorator(func: Callable) -> Callable:
+            @wraps(func)
+            def wrapper(self: DictLikeFileABC, *args, **kwargs):
+                temp_data = self._content
+                value = applied_func(temp_data, *args, **kwargs)
+                self.rewrite(temp_data)
+                return value
+            return wrapper
+        return decorator
+
+    @_semi_applied(dict.update)
+    def update(self, updates: dict[str, Any]) -> None:
+        pass
+
+    @_semi_applied(dict.pop)
+    def pop(self, key: str, default: Any = None):
+        pass
+
+    @_semi_applied(dict.fromkeys)
+    def fromkeys(self, iterable: Iterable, value: Any = None):
+        pass
+
+    @_semi_applied(dict.popitem)
+    def popitem(self):
+        pass
+
+    @_semi_applied(dict.setdefault)
+    def setdefault(self, key: str, default: Any = None):
+        pass
